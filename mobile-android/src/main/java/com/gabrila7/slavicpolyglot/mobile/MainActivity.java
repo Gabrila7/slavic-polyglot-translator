@@ -32,13 +32,14 @@ import com.gabrila7.slavicpolyglot.model.TranslationEntry;
 import com.gabrila7.slavicpolyglot.service.OfflineDictionary;
 import com.gabrila7.slavicpolyglot.service.TranslationService;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * Activity principal da versão Mobile (Android), seguindo exatamente o fluxo
- * e o design minimalista do app Google Tradutor (Português, Inglês e Espanhol),
- * com tradução automática em tempo real enquanto o usuário digita.
+ * Activity principal da versão Mobile (Android) do Tradutor,
+ * com suporte a Tema Claro e Tema Escuro (Dark Mode) em tempo real.
  *
  * @author Gabriel Vinícius (@Gabrila7)
  */
@@ -48,12 +49,26 @@ public class MainActivity extends Activity {
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
+    private boolean darkMode = false;
+
+    private LinearLayout screenRoot;
+    private LinearLayout headerBar;
+    private LinearLayout mainCard;
+    private LinearLayout targetSection;
+    private View dividerView;
+
+    private TextView appTitle;
+    private Button themeBtn;
+    private Button swapBtn;
+    private Button clearBtn;
     private Spinner sourceSpinner;
     private Spinner targetSpinner;
     private EditText inputEdit;
     private TextView outputText;
     private TextView detectedLabel;
     private TextView targetLangTitle;
+    private TextView quickSamplesLabel;
+    private final List<Button> actionChips = new ArrayList<>();
 
     private final Language[] sourceOptions = new Language[]{
             Language.AUTO, Language.PORTUGUESE, Language.ENGLISH, Language.SPANISH
@@ -67,17 +82,12 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        LinearLayout screenRoot = new LinearLayout(this);
+        screenRoot = new LinearLayout(this);
         screenRoot.setOrientation(LinearLayout.VERTICAL);
-        screenRoot.setBackgroundColor(Color.parseColor("#F8F9FA"));
 
-        // 1. Barra superior estilo Google Translate
         screenRoot.addView(createGoogleHeaderBar());
-
-        // 2. Barra de seleção de idiomas (Origem ⇄ Destino)
         screenRoot.addView(createLanguagePillBar());
 
-        // 3. Corpo principal rolável
         ScrollView scrollView = new ScrollView(this);
         scrollView.setFillViewport(true);
 
@@ -94,37 +104,35 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         setContentView(screenRoot);
+        applyTheme();
         performLiveTranslation();
     }
 
     private View createGoogleHeaderBar() {
-        LinearLayout bar = new LinearLayout(this);
-        bar.setOrientation(LinearLayout.HORIZONTAL);
-        bar.setGravity(Gravity.CENTER_VERTICAL);
-        bar.setBackgroundColor(Color.WHITE);
-        bar.setPadding(dp(20), dp(14), dp(20), dp(14));
+        headerBar = new LinearLayout(this);
+        headerBar.setOrientation(LinearLayout.HORIZONTAL);
+        headerBar.setGravity(Gravity.CENTER_VERTICAL);
+        headerBar.setPadding(dp(20), dp(14), dp(20), dp(14));
 
-        TextView icon = new TextView(this);
-        icon.setText("🌐 ");
-        icon.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20);
+        appTitle = new TextView(this);
+        appTitle.setText("🌐 Tradutor");
+        appTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20);
+        appTitle.setTypeface(Typeface.DEFAULT_BOLD);
 
-        TextView title = new TextView(this);
-        title.setText("Tradutor");
-        title.setTextColor(Color.parseColor("#202124"));
-        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20);
-        title.setTypeface(Typeface.DEFAULT_BOLD);
+        themeBtn = new Button(this);
+        themeBtn.setAllCaps(false);
+        themeBtn.setText("🌙 Escuro");
+        themeBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        themeBtn.setTypeface(Typeface.DEFAULT_BOLD);
+        themeBtn.setPadding(dp(12), dp(6), dp(12), dp(6));
+        themeBtn.setOnClickListener(v -> {
+            darkMode = !darkMode;
+            applyTheme();
+        });
 
-        TextView badge = new TextView(this);
-        badge.setText("PT • EN • ES");
-        badge.setTextColor(Color.parseColor("#1A73E8"));
-        badge.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
-        badge.setTypeface(Typeface.DEFAULT_BOLD);
-        badge.setGravity(Gravity.END);
-
-        bar.addView(icon);
-        bar.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        bar.addView(badge);
-        return bar;
+        headerBar.addView(appTitle, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        headerBar.addView(themeBtn);
+        return headerBar;
     }
 
     private View createLanguagePillBar() {
@@ -137,23 +145,19 @@ public class MainActivity extends Activity {
                 this, android.R.layout.simple_spinner_dropdown_item, sourceOptions);
         sourceSpinner = new Spinner(this);
         sourceSpinner.setAdapter(srcAdapter);
-        sourceSpinner.setSelection(0); // Detectar idioma
-        sourceSpinner.setBackground(roundedBox("#FFFFFF", "#DADCE0", 24));
+        sourceSpinner.setSelection(0);
 
-        Button swapBtn = new Button(this);
+        swapBtn = new Button(this);
         swapBtn.setAllCaps(false);
         swapBtn.setText("⇄");
         swapBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
-        swapBtn.setTextColor(Color.parseColor("#1A73E8"));
-        swapBtn.setBackground(roundedBox("#E8F0FE", "#D2E3FC", 24));
         swapBtn.setOnClickListener(v -> swapLanguages());
 
         ArrayAdapter<Language> tgtAdapter = new ArrayAdapter<>(
                 this, android.R.layout.simple_spinner_dropdown_item, targetOptions);
         targetSpinner = new Spinner(this);
         targetSpinner.setAdapter(tgtAdapter);
-        targetSpinner.setSelection(1); // Inglês
-        targetSpinner.setBackground(roundedBox("#FFFFFF", "#DADCE0", 24));
+        targetSpinner.setSelection(1);
 
         AdapterView.OnItemSelectedListener listener = new AdapterView.OnItemSelectedListener() {
             @Override
@@ -183,11 +187,9 @@ public class MainActivity extends Activity {
     }
 
     private View createMainTranslationCard() {
-        LinearLayout card = new LinearLayout(this);
-        card.setOrientation(LinearLayout.VERTICAL);
-        card.setBackground(roundedBox("#FFFFFF", "#DADCE0", 16));
+        mainCard = new LinearLayout(this);
+        mainCard.setOrientation(LinearLayout.VERTICAL);
 
-        // --- METADE SUPERIOR: TEXTO DE ORIGEM ---
         LinearLayout sourceSection = new LinearLayout(this);
         sourceSection.setOrientation(LinearLayout.VERTICAL);
         sourceSection.setPadding(dp(18), dp(14), dp(14), dp(12));
@@ -200,13 +202,11 @@ public class MainActivity extends Activity {
         detectedLabel.setText("DIGITE O TEXTO");
         detectedLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
         detectedLabel.setTypeface(Typeface.DEFAULT_BOLD);
-        detectedLabel.setTextColor(Color.parseColor("#5F6368"));
 
-        Button clearBtn = new Button(this);
+        clearBtn = new Button(this);
         clearBtn.setAllCaps(false);
         clearBtn.setText("✕");
         clearBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
-        clearBtn.setTextColor(Color.parseColor("#5F6368"));
         clearBtn.setBackgroundColor(Color.TRANSPARENT);
         clearBtn.setOnClickListener(v -> {
             inputEdit.setText("");
@@ -224,7 +224,6 @@ public class MainActivity extends Activity {
         inputEdit.setMaxLines(6);
         inputEdit.setGravity(Gravity.TOP | Gravity.START);
         inputEdit.setTextSize(TypedValue.COMPLEX_UNIT_SP, 21);
-        inputEdit.setTextColor(Color.parseColor("#202124"));
         inputEdit.setBackgroundColor(Color.TRANSPARENT);
         inputEdit.setPadding(0, dp(6), 0, dp(8));
 
@@ -248,27 +247,21 @@ public class MainActivity extends Activity {
         sourceSection.addView(srcTopRow);
         sourceSection.addView(inputEdit);
 
-        // Linha divisória horizontal
-        View divider = new View(this);
-        divider.setBackgroundColor(Color.parseColor("#DADCE0"));
-        divider.setLayoutParams(new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)));
+        dividerView = new View(this);
+        dividerView.setLayoutParams(new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)));
 
-        // --- METADE INFERIOR: RESULTADO DA TRADUÇÃO (Fundo azul/cinza suave estilo Google) ---
-        LinearLayout targetSection = new LinearLayout(this);
+        targetSection = new LinearLayout(this);
         targetSection.setOrientation(LinearLayout.VERTICAL);
         targetSection.setPadding(dp(18), dp(14), dp(18), dp(16));
-        targetSection.setBackgroundColor(Color.parseColor("#F1F3F4"));
 
         targetLangTitle = new TextView(this);
         targetLangTitle.setText("INGLÊS");
         targetLangTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
         targetLangTitle.setTypeface(Typeface.DEFAULT_BOLD);
-        targetLangTitle.setTextColor(Color.parseColor("#1A73E8"));
 
         outputText = new TextView(this);
         outputText.setText("Good morning! How are you today?");
         outputText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 21);
-        outputText.setTextColor(Color.parseColor("#202124"));
         outputText.setMinLines(3);
         outputText.setPadding(0, dp(8), 0, dp(10));
 
@@ -294,27 +287,26 @@ public class MainActivity extends Activity {
         targetSection.addView(outputText);
         targetSection.addView(actionRow);
 
-        card.addView(sourceSection);
-        card.addView(divider);
-        card.addView(targetSection);
+        mainCard.addView(sourceSection);
+        mainCard.addView(dividerView);
+        mainCard.addView(targetSection);
 
         LinearLayout.LayoutParams cardLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         cardLp.bottomMargin = dp(14);
-        card.setLayoutParams(cardLp);
-        return card;
+        mainCard.setLayoutParams(cardLp);
+        return mainCard;
     }
 
     private View createQuickSamplesSection() {
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
 
-        TextView label = new TextView(this);
-        label.setText("Frases rápidas para testar:");
-        label.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
-        label.setTextColor(Color.parseColor("#5F6368"));
-        label.setPadding(dp(4), 0, 0, dp(8));
-        box.addView(label);
+        quickSamplesLabel = new TextView(this);
+        quickSamplesLabel.setText("Frases rápidas para testar:");
+        quickSamplesLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        quickSamplesLabel.setPadding(dp(4), 0, 0, dp(8));
+        box.addView(quickSamplesLabel);
 
         HorizontalScrollView hsv = new HorizontalScrollView(this);
         hsv.setHorizontalScrollBarEnabled(false);
@@ -326,8 +318,8 @@ public class MainActivity extends Activity {
             final String pt = phrase.getByLanguage(Language.PORTUGUESE);
             Button chip = createActionChip(pt);
             chip.setOnClickListener(v -> {
-                sourceSpinner.setSelection(1); // PT
-                targetSpinner.setSelection(1); // EN
+                sourceSpinner.setSelection(1);
+                targetSpinner.setSelection(1);
                 inputEdit.setText(pt);
             });
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
@@ -341,6 +333,48 @@ public class MainActivity extends Activity {
         return box;
     }
 
+    private void applyTheme() {
+        String pageBg = darkMode ? "#0F172A" : "#F8F9FA";
+        String cardBg = darkMode ? "#1E293B" : "#FFFFFF";
+        String outBg = darkMode ? "#172030" : "#F1F3F4";
+        String border = darkMode ? "#334155" : "#DADCE0";
+        String priText = darkMode ? "#F1F5F9" : "#202124";
+        String secText = darkMode ? "#94A3B8" : "#5F6368";
+        String accent = darkMode ? "#8AB4F8" : "#1A73E8";
+
+        screenRoot.setBackgroundColor(Color.parseColor(pageBg));
+        headerBar.setBackgroundColor(Color.parseColor(cardBg));
+        appTitle.setTextColor(Color.parseColor(priText));
+
+        themeBtn.setText(darkMode ? "☀️ Claro" : "🌙 Escuro");
+        themeBtn.setTextColor(Color.parseColor(priText));
+        themeBtn.setBackground(roundedBox(pageBg, border, 18));
+
+        sourceSpinner.setBackground(roundedBox(cardBg, border, 24));
+        targetSpinner.setBackground(roundedBox(cardBg, border, 24));
+
+        swapBtn.setTextColor(Color.parseColor(accent));
+        swapBtn.setBackground(roundedBox(darkMode ? "#1E3A8A" : "#E8F0FE", border, 24));
+
+        mainCard.setBackground(roundedBox(cardBg, border, 16));
+        dividerView.setBackgroundColor(Color.parseColor(border));
+        targetSection.setBackground(roundedBox(outBg, border, 12));
+
+        detectedLabel.setTextColor(Color.parseColor(secText));
+        clearBtn.setTextColor(Color.parseColor(secText));
+        inputEdit.setTextColor(Color.parseColor(priText));
+        inputEdit.setHintTextColor(Color.parseColor(secText));
+
+        targetLangTitle.setTextColor(Color.parseColor(accent));
+        outputText.setTextColor(Color.parseColor(priText));
+        quickSamplesLabel.setTextColor(Color.parseColor(secText));
+
+        for (Button chip : actionChips) {
+            chip.setTextColor(Color.parseColor(accent));
+            chip.setBackground(roundedBox(cardBg, border, 18));
+        }
+    }
+
     private void swapLanguages() {
         Language src = (Language) sourceSpinner.getSelectedItem();
         Language tgt = (Language) targetSpinner.getSelectedItem();
@@ -349,14 +383,12 @@ public class MainActivity extends Activity {
             src = OfflineDictionary.guessLanguage(inputEdit.getText().toString());
         }
 
-        // Seleciona o antigo destino na origem
         for (int i = 0; i < sourceOptions.length; i++) {
             if (sourceOptions[i] == tgt) {
                 sourceSpinner.setSelection(i);
                 break;
             }
         }
-        // Seleciona a antiga origem no destino
         for (int i = 0; i < targetOptions.length; i++) {
             if (targetOptions[i] == src) {
                 targetSpinner.setSelection(i);
@@ -383,13 +415,10 @@ public class MainActivity extends Activity {
         final Language src = (Language) sourceSpinner.getSelectedItem();
         final Language tgt = (Language) targetSpinner.getSelectedItem();
 
-        outputText.setTextColor(Color.parseColor("#5F6368"));
-
         executor.execute(() -> {
             try {
                 final TranslationEntry entry = translationService.translate(text, src, tgt);
                 mainHandler.post(() -> {
-                    outputText.setTextColor(Color.parseColor("#202124"));
                     outputText.setText(entry.getTranslatedText());
                     if (src == Language.AUTO) {
                         detectedLabel.setText("DETECTADO: " + entry.getSourceLang().getDisplayName().toUpperCase());
@@ -398,10 +427,7 @@ public class MainActivity extends Activity {
                     }
                 });
             } catch (final Exception e) {
-                mainHandler.post(() -> {
-                    outputText.setTextColor(Color.parseColor("#5F6368"));
-                    outputText.setText("Sem conexão no momento.");
-                });
+                mainHandler.post(() -> outputText.setText("Sem conexão no momento."));
             }
         });
     }
@@ -411,10 +437,9 @@ public class MainActivity extends Activity {
         b.setAllCaps(false);
         b.setText(text);
         b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
-        b.setTextColor(Color.parseColor("#1A73E8"));
         b.setTypeface(Typeface.DEFAULT_BOLD);
-        b.setBackground(roundedBox("#FFFFFF", "#DADCE0", 18));
         b.setPadding(dp(14), dp(6), dp(14), dp(6));
+        actionChips.add(b);
         return b;
     }
 

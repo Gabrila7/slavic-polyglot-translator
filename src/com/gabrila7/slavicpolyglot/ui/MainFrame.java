@@ -15,15 +15,14 @@ import java.awt.datatransfer.DataFlavor;
 import java.awt.datatransfer.StringSelection;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.util.ArrayList;
 import java.util.EnumMap;
+import java.util.List;
 import java.util.Map;
 
 /**
- * Interface principal inspirada diretamente no design e interação do Google Tradutor:
- * - Abas de idioma clicáveis com indicador azul inferior
- * - Tradução automática em tempo real enquanto você digita (debounce 350ms)
- * - Botão central circular de inverter idiomas (⇄)
- * - Duas áreas lado a lado (Origem em branco, Tradução em cinza suave)
+ * Interface principal inspirada no Google Tradutor com suporte completo
+ * a alternância entre Tema Claro e Tema Escuro (Dark Mode).
  *
  * @author Gabriel Vinícius (@Gabrila7)
  */
@@ -33,32 +32,66 @@ public class MainFrame extends JFrame {
 
     private Language selectedSource = Language.AUTO;
     private Language selectedTarget = Language.ENGLISH;
+    private boolean darkMode = false;
 
     private final Map<Language, LanguageTabButton> sourceTabs = new EnumMap<>(Language.class);
     private final Map<Language, LanguageTabButton> targetTabs = new EnumMap<>(Language.class);
+    private final List<JButton> subtleButtons = new ArrayList<>();
 
+    private JPanel rootPanel;
+    private JPanel topBar;
+    private JPanel centerWrapper;
+    private JPanel mainTranslatorCard;
+    private JPanel tabsHeader;
+    private JPanel sourcePane;
+    private JPanel targetPane;
+
+    private JLabel titleLabel;
+    private JLabel subtitleLabel;
+    private JLabel sampleLabel;
     private JTextArea inputArea;
     private JTextArea outputArea;
     private JLabel charCountLabel;
     private JLabel detectedBadgeLabel;
     private JLabel statusFeedbackLabel;
+    private JButton themeToggleBtn;
+    private JButton swapBtn;
+    private JButton clearXBtn;
+
     private Timer debounceTimer;
     private SwingWorker<TranslationEntry, Void> activeWorker;
     private boolean suppressEvents = false;
 
-    // Cores oficiais estilo Google Translate
-    private static final Color PAGE_BG = new Color(248, 249, 250);       // #F8F9FA
-    private static final Color CARD_WHITE = Color.WHITE;                 // #FFFFFF
-    private static final Color OUTPUT_BG = new Color(241, 243, 244);     // #F1F3F4
-    private static final Color BORDER_GRAY = new Color(218, 220, 224);   // #DADCE0
-    private static final Color GOOGLE_BLUE = new Color(26, 115, 232);    // #1A73E8
-    private static final Color TEXT_PRIMARY = new Color(32, 33, 36);     // #202124
-    private static final Color TEXT_SECONDARY = new Color(95, 99, 104);  // #5F6368
+    // Paleta Clara (Google Light)
+    private static final Color LIGHT_PAGE_BG = new Color(248, 249, 250);      // #F8F9FA
+    private static final Color LIGHT_CARD = Color.WHITE;                      // #FFFFFF
+    private static final Color LIGHT_OUTPUT_BG = new Color(241, 243, 244);    // #F1F3F4
+    private static final Color LIGHT_BORDER = new Color(218, 220, 224);       // #DADCE0
+    private static final Color LIGHT_BLUE = new Color(26, 115, 232);          // #1A73E8
+    private static final Color LIGHT_TEXT_PRI = new Color(32, 33, 36);        // #202124
+    private static final Color LIGHT_TEXT_SEC = new Color(95, 99, 104);       // #5F6368
+
+    // Paleta Escura (Google Dark)
+    private static final Color DARK_PAGE_BG = new Color(15, 23, 42);          // #0F172A
+    private static final Color DARK_CARD = new Color(30, 41, 59);             // #1E293B
+    private static final Color DARK_OUTPUT_BG = new Color(23, 32, 48);        // #172030
+    private static final Color DARK_BORDER = new Color(51, 65, 85);           // #334155
+    private static final Color DARK_BLUE = new Color(138, 180, 248);          // #8AB4F8
+    private static final Color DARK_TEXT_PRI = new Color(241, 245, 249);      // #F1F5F9
+    private static final Color DARK_TEXT_SEC = new Color(148, 163, 184);      // #94A3B8
 
     public MainFrame() {
         super("Tradutor — Português • Inglês • Espanhol");
         initUI();
     }
+
+    private Color getPageBg() { return darkMode ? DARK_PAGE_BG : LIGHT_PAGE_BG; }
+    private Color getCardBg() { return darkMode ? DARK_CARD : LIGHT_CARD; }
+    private Color getOutputBg() { return darkMode ? DARK_OUTPUT_BG : LIGHT_OUTPUT_BG; }
+    private Color getBorderColor() { return darkMode ? DARK_BORDER : LIGHT_BORDER; }
+    private Color getAccentBlue() { return darkMode ? DARK_BLUE : LIGHT_BLUE; }
+    private Color getTextPrimary() { return darkMode ? DARK_TEXT_PRI : LIGHT_TEXT_PRI; }
+    private Color getTextSecondary() { return darkMode ? DARK_TEXT_SEC : LIGHT_TEXT_SEC; }
 
     private void initUI() {
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
@@ -66,38 +99,27 @@ public class MainFrame extends JFrame {
         setMinimumSize(new Dimension(780, 460));
         setLocationRelativeTo(null);
 
-        JPanel root = new JPanel(new BorderLayout(0, 0));
-        root.setBackground(PAGE_BG);
+        rootPanel = new JPanel(new BorderLayout(0, 0));
+        rootPanel.add(createGoogleTopBar(), BorderLayout.NORTH);
 
-        // 1. Barra superior estilo Google Translate
-        root.add(createGoogleTopBar(), BorderLayout.NORTH);
-
-        // 2. Container principal do cartão de tradução
-        JPanel centerWrapper = new JPanel(new BorderLayout(0, 14));
-        centerWrapper.setBackground(PAGE_BG);
+        centerWrapper = new JPanel(new BorderLayout(0, 14));
         centerWrapper.setBorder(new EmptyBorder(24, 28, 18, 28));
 
         centerWrapper.add(createMainTranslatorCard(), BorderLayout.CENTER);
         centerWrapper.add(createQuickExamplesStrip(), BorderLayout.SOUTH);
 
-        root.add(centerWrapper, BorderLayout.CENTER);
-        setContentPane(root);
+        rootPanel.add(centerWrapper, BorderLayout.CENTER);
+        setContentPane(rootPanel);
 
-        // Timer de debounce (350ms) para traduzir sozinho assim que o usuário para de digitar
         debounceTimer = new Timer(350, e -> triggerLiveTranslation());
         debounceTimer.setRepeats(false);
 
-        updateTabSelectionUI();
+        applyTheme();
         triggerLiveTranslation();
     }
 
     private JPanel createGoogleTopBar() {
-        JPanel topBar = new JPanel(new BorderLayout());
-        topBar.setBackground(CARD_WHITE);
-        topBar.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createMatteBorder(0, 0, 1, 0, BORDER_GRAY),
-                new EmptyBorder(12, 28, 12, 28)
-        ));
+        topBar = new JPanel(new BorderLayout());
 
         JPanel leftBrand = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 0));
         leftBrand.setOpaque(false);
@@ -105,53 +127,54 @@ public class MainFrame extends JFrame {
         JLabel iconLabel = new JLabel("🌐");
         iconLabel.setFont(new Font("Segoe UI Emoji", Font.PLAIN, 20));
 
-        JLabel title = new JLabel("Tradutor");
-        title.setFont(new Font("Segoe UI", Font.BOLD, 20));
-        title.setForeground(TEXT_PRIMARY);
+        titleLabel = new JLabel("Tradutor");
+        titleLabel.setFont(new Font("Segoe UI", Font.BOLD, 20));
 
-        JLabel subtitle = new JLabel("Português • Inglês • Espanhol");
-        subtitle.setFont(new Font("Segoe UI", Font.PLAIN, 13));
-        subtitle.setForeground(TEXT_SECONDARY);
-        subtitle.setBorder(new EmptyBorder(2, 6, 0, 0));
+        subtitleLabel = new JLabel("Português • Inglês • Espanhol");
+        subtitleLabel.setFont(new Font("Segoe UI", Font.PLAIN, 13));
+        subtitleLabel.setBorder(new EmptyBorder(2, 6, 0, 0));
 
         leftBrand.add(iconLabel);
-        leftBrand.add(title);
-        leftBrand.add(subtitle);
+        leftBrand.add(titleLabel);
+        leftBrand.add(subtitleLabel);
+
+        JPanel rightControls = new JPanel(new FlowLayout(FlowLayout.RIGHT, 12, 0));
+        rightControls.setOpaque(false);
 
         statusFeedbackLabel = new JLabel("Tradução instantânea ativada");
         statusFeedbackLabel.setFont(new Font("Segoe UI", Font.PLAIN, 12));
-        statusFeedbackLabel.setForeground(TEXT_SECONDARY);
+
+        themeToggleBtn = createSubtlePillButton("🌙 Tema Escuro");
+        themeToggleBtn.addActionListener(e -> {
+            darkMode = !darkMode;
+            applyTheme();
+        });
+
+        rightControls.add(statusFeedbackLabel);
+        rightControls.add(themeToggleBtn);
 
         topBar.add(leftBrand, BorderLayout.WEST);
-        topBar.add(statusFeedbackLabel, BorderLayout.EAST);
+        topBar.add(rightControls, BorderLayout.EAST);
         return topBar;
     }
 
     private JPanel createMainTranslatorCard() {
-        JPanel card = new JPanel(new BorderLayout(0, 0));
-        card.setBackground(CARD_WHITE);
-        card.setBorder(new LineBorder(BORDER_GRAY, 1, true));
+        mainTranslatorCard = new JPanel(new BorderLayout(0, 0));
+        mainTranslatorCard.add(createLanguageTabsHeader(), BorderLayout.NORTH);
 
-        // Topo do cartão: Abas de idioma na esquerda | Botão Inverter (⇄) | Abas de idioma na direita
-        card.add(createLanguageTabsHeader(), BorderLayout.NORTH);
-
-        // Corpo do cartão: Área de digitação (Esquerda) e Área de tradução (Direita)
         JPanel splitBody = new JPanel(new GridLayout(1, 2, 0, 0));
         splitBody.setOpaque(false);
 
         splitBody.add(createSourcePane());
         splitBody.add(createTargetPane());
 
-        card.add(splitBody, BorderLayout.CENTER);
-        return card;
+        mainTranslatorCard.add(splitBody, BorderLayout.CENTER);
+        return mainTranslatorCard;
     }
 
     private JPanel createLanguageTabsHeader() {
-        JPanel header = new JPanel(new BorderLayout(0, 0));
-        header.setBackground(CARD_WHITE);
-        header.setBorder(BorderFactory.createMatteBorder(0, 0, 1, 0, BORDER_GRAY));
+        tabsHeader = new JPanel(new BorderLayout(0, 0));
 
-        // Abas da Esquerda (Origem: Detectar idioma, Português, Inglês, Espanhol)
         JPanel leftTabs = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
         leftTabs.setOpaque(false);
         leftTabs.setBorder(new EmptyBorder(0, 10, 0, 0));
@@ -167,17 +190,15 @@ public class MainFrame extends JFrame {
             leftTabs.add(btn);
         }
 
-        // Centro: Botão de Inverter Idiomas (⇄)
         JPanel centerSwapPanel = new JPanel(new FlowLayout(FlowLayout.CENTER, 0, 6));
         centerSwapPanel.setOpaque(false);
 
-        JButton swapBtn = createIconActionButton("⇄", "Inverter idiomas (Ctrl+Shift+S)");
+        swapBtn = createIconActionButton("⇄", "Inverter idiomas");
         swapBtn.setFont(new Font("Segoe UI Symbol", Font.BOLD, 16));
         swapBtn.setPreferredSize(new Dimension(40, 36));
         swapBtn.addActionListener(e -> swapLanguages());
         centerSwapPanel.add(swapBtn);
 
-        // Abas da Direita (Destino: Português, Inglês, Espanhol)
         JPanel rightTabs = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
         rightTabs.setOpaque(false);
         rightTabs.setBorder(new EmptyBorder(0, 10, 0, 0));
@@ -198,24 +219,20 @@ public class MainFrame extends JFrame {
         twoSides.add(leftTabs);
         twoSides.add(rightTabs);
 
-        header.add(twoSides, BorderLayout.CENTER);
-        header.add(centerSwapPanel, BorderLayout.EAST);
-        return header;
+        tabsHeader.add(twoSides, BorderLayout.CENTER);
+        tabsHeader.add(centerSwapPanel, BorderLayout.EAST);
+        return tabsHeader;
     }
 
     private JPanel createSourcePane() {
-        JPanel pane = new JPanel(new BorderLayout(0, 0));
-        pane.setBackground(CARD_WHITE);
-        pane.setBorder(BorderFactory.createMatteBorder(0, 0, 0, 1, BORDER_GRAY));
+        sourcePane = new JPanel(new BorderLayout(0, 0));
 
-        // Área de texto com botão "✕" no canto superior direito
         JPanel textWrapper = new JPanel(new BorderLayout());
         textWrapper.setOpaque(false);
         textWrapper.setBorder(new EmptyBorder(16, 20, 8, 12));
 
         inputArea = new JTextArea();
         inputArea.setFont(new Font("Segoe UI", Font.PLAIN, 22));
-        inputArea.setForeground(TEXT_PRIMARY);
         inputArea.setLineWrap(true);
         inputArea.setWrapStyleWord(true);
         inputArea.setBorder(null);
@@ -235,10 +252,9 @@ public class MainFrame extends JFrame {
         scroll.setOpaque(false);
         scroll.getViewport().setOpaque(false);
 
-        // Botão X para limpar rápido (igual ao Google Translate)
         JPanel topRightClear = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 0));
         topRightClear.setOpaque(false);
-        JButton clearXBtn = createIconActionButton("✕", "Limpar texto");
+        clearXBtn = createIconActionButton("✕", "Limpar texto");
         clearXBtn.setPreferredSize(new Dimension(32, 32));
         clearXBtn.addActionListener(e -> {
             inputArea.setText("");
@@ -251,7 +267,6 @@ public class MainFrame extends JFrame {
         textWrapper.add(scroll, BorderLayout.CENTER);
         textWrapper.add(topRightClear, BorderLayout.EAST);
 
-        // Rodapé do painel esquerdo: Colar + Contador de caracteres
         JPanel bottomBar = new JPanel(new BorderLayout());
         bottomBar.setOpaque(false);
         bottomBar.setBorder(new EmptyBorder(8, 20, 14, 18));
@@ -265,24 +280,21 @@ public class MainFrame extends JFrame {
 
         detectedBadgeLabel = new JLabel("");
         detectedBadgeLabel.setFont(new Font("Segoe UI", Font.ITALIC, 12));
-        detectedBadgeLabel.setForeground(GOOGLE_BLUE);
         leftTools.add(detectedBadgeLabel);
 
         charCountLabel = new JLabel("29 / 5000");
         charCountLabel.setFont(new Font("Segoe UI", Font.PLAIN, 12));
-        charCountLabel.setForeground(TEXT_SECONDARY);
 
         bottomBar.add(leftTools, BorderLayout.WEST);
         bottomBar.add(charCountLabel, BorderLayout.EAST);
 
-        pane.add(textWrapper, BorderLayout.CENTER);
-        pane.add(bottomBar, BorderLayout.SOUTH);
-        return pane;
+        sourcePane.add(textWrapper, BorderLayout.CENTER);
+        sourcePane.add(bottomBar, BorderLayout.SOUTH);
+        return sourcePane;
     }
 
     private JPanel createTargetPane() {
-        JPanel pane = new JPanel(new BorderLayout(0, 0));
-        pane.setBackground(OUTPUT_BG);
+        targetPane = new JPanel(new BorderLayout(0, 0));
 
         JPanel textWrapper = new JPanel(new BorderLayout());
         textWrapper.setOpaque(false);
@@ -290,8 +302,6 @@ public class MainFrame extends JFrame {
 
         outputArea = new JTextArea();
         outputArea.setFont(new Font("Segoe UI", Font.PLAIN, 22));
-        outputArea.setForeground(TEXT_PRIMARY);
-        outputArea.setBackground(OUTPUT_BG);
         outputArea.setLineWrap(true);
         outputArea.setWrapStyleWord(true);
         outputArea.setEditable(false);
@@ -305,7 +315,6 @@ public class MainFrame extends JFrame {
 
         textWrapper.add(scroll, BorderLayout.CENTER);
 
-        // Rodapé do painel direito: Botão Copiar Tradução
         JPanel bottomBar = new JPanel(new BorderLayout());
         bottomBar.setOpaque(false);
         bottomBar.setBorder(new EmptyBorder(8, 20, 14, 20));
@@ -319,19 +328,18 @@ public class MainFrame extends JFrame {
 
         bottomBar.add(rightActions, BorderLayout.EAST);
 
-        pane.add(textWrapper, BorderLayout.CENTER);
-        pane.add(bottomBar, BorderLayout.SOUTH);
-        return pane;
+        targetPane.add(textWrapper, BorderLayout.CENTER);
+        targetPane.add(bottomBar, BorderLayout.SOUTH);
+        return targetPane;
     }
 
     private JPanel createQuickExamplesStrip() {
         JPanel strip = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
         strip.setOpaque(false);
 
-        JLabel label = new JLabel("Testar frases rápidas:");
-        label.setFont(new Font("Segoe UI", Font.PLAIN, 12));
-        label.setForeground(TEXT_SECONDARY);
-        strip.add(label);
+        sampleLabel = new JLabel("Testar frases rápidas:");
+        sampleLabel.setFont(new Font("Segoe UI", Font.PLAIN, 12));
+        strip.add(sampleLabel);
 
         String[][] samples = {
                 {"Como vai você?", "PT"},
@@ -344,11 +352,7 @@ public class MainFrame extends JFrame {
             JButton chip = createSubtlePillButton(s[0]);
             chip.addActionListener(e -> {
                 selectedSource = Language.AUTO;
-                if ("EN".equals(s[1])) {
-                    selectedTarget = Language.PORTUGUESE;
-                } else {
-                    selectedTarget = Language.ENGLISH;
-                }
+                selectedTarget = "EN".equals(s[1]) ? Language.PORTUGUESE : Language.ENGLISH;
                 updateTabSelectionUI();
                 inputArea.setText(s[0]);
             });
@@ -356,6 +360,68 @@ public class MainFrame extends JFrame {
         }
 
         return strip;
+    }
+
+    private void applyTheme() {
+        Color pageBg = getPageBg();
+        Color cardBg = getCardBg();
+        Color outBg = getOutputBg();
+        Color border = getBorderColor();
+        Color pri = getTextPrimary();
+        Color sec = getTextSecondary();
+        Color blue = getAccentBlue();
+
+        rootPanel.setBackground(pageBg);
+        centerWrapper.setBackground(pageBg);
+
+        topBar.setBackground(cardBg);
+        topBar.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createMatteBorder(0, 0, 1, 0, border),
+                new EmptyBorder(12, 28, 12, 28)
+        ));
+
+        titleLabel.setForeground(pri);
+        subtitleLabel.setForeground(sec);
+        statusFeedbackLabel.setForeground(sec);
+        sampleLabel.setForeground(sec);
+
+        themeToggleBtn.setText(darkMode ? "☀️ Tema Claro" : "🌙 Tema Escuro");
+
+        mainTranslatorCard.setBackground(cardBg);
+        mainTranslatorCard.setBorder(new LineBorder(border, 1, true));
+
+        tabsHeader.setBackground(cardBg);
+        tabsHeader.setBorder(BorderFactory.createMatteBorder(0, 0, 1, 0, border));
+
+        sourcePane.setBackground(cardBg);
+        sourcePane.setBorder(BorderFactory.createMatteBorder(0, 0, 0, 1, border));
+
+        targetPane.setBackground(outBg);
+
+        inputArea.setBackground(cardBg);
+        inputArea.setForeground(pri);
+        inputArea.setCaretColor(pri);
+
+        outputArea.setBackground(outBg);
+        outputArea.setForeground(pri);
+
+        detectedBadgeLabel.setForeground(blue);
+        charCountLabel.setForeground(sec);
+
+        swapBtn.setForeground(sec);
+        clearXBtn.setForeground(sec);
+
+        for (JButton btn : subtleButtons) {
+            btn.setBackground(cardBg);
+            btn.setForeground(pri);
+            btn.setBorder(BorderFactory.createCompoundBorder(
+                    new LineBorder(border, 1, true),
+                    new EmptyBorder(5, 12, 5, 12)
+            ));
+        }
+
+        updateTabSelectionUI();
+        repaint();
     }
 
     private void onInputModified() {
@@ -371,7 +437,7 @@ public class MainFrame extends JFrame {
             return;
         }
 
-        outputArea.setForeground(TEXT_SECONDARY);
+        outputArea.setForeground(getTextSecondary());
         debounceTimer.restart();
     }
 
@@ -433,7 +499,7 @@ public class MainFrame extends JFrame {
                 if (isCancelled()) return;
                 try {
                     TranslationEntry entry = get();
-                    outputArea.setForeground(TEXT_PRIMARY);
+                    outputArea.setForeground(getTextPrimary());
                     outputArea.setText(entry.getTranslatedText());
 
                     if (src == Language.AUTO) {
@@ -443,7 +509,7 @@ public class MainFrame extends JFrame {
                     }
                     statusFeedbackLabel.setText("Traduzido automaticamente");
                 } catch (Exception ex) {
-                    outputArea.setForeground(TEXT_SECONDARY);
+                    outputArea.setForeground(getTextSecondary());
                     outputArea.setText("Sem conexão no momento.");
                     statusFeedbackLabel.setText("Modo offline");
                 }
@@ -473,8 +539,6 @@ public class MainFrame extends JFrame {
         JButton btn = new JButton(symbol);
         btn.setToolTipText(tooltip);
         btn.setFont(new Font("Segoe UI", Font.PLAIN, 15));
-        btn.setForeground(TEXT_SECONDARY);
-        btn.setBackground(CARD_WHITE);
         btn.setFocusPainted(false);
         btn.setBorderPainted(false);
         btn.setContentAreaFilled(false);
@@ -482,12 +546,12 @@ public class MainFrame extends JFrame {
         btn.addMouseListener(new MouseAdapter() {
             @Override
             public void mouseEntered(MouseEvent e) {
-                btn.setForeground(GOOGLE_BLUE);
+                btn.setForeground(getAccentBlue());
             }
 
             @Override
             public void mouseExited(MouseEvent e) {
-                btn.setForeground(TEXT_SECONDARY);
+                btn.setForeground(getTextSecondary());
             }
         });
         return btn;
@@ -496,21 +560,13 @@ public class MainFrame extends JFrame {
     private JButton createSubtlePillButton(String text) {
         JButton btn = new JButton(text);
         btn.setFont(new Font("Segoe UI", Font.BOLD, 12));
-        btn.setForeground(TEXT_SECONDARY);
-        btn.setBackground(CARD_WHITE);
         btn.setFocusPainted(false);
-        btn.setBorder(BorderFactory.createCompoundBorder(
-                new LineBorder(BORDER_GRAY, 1, true),
-                new EmptyBorder(5, 12, 5, 12)
-        ));
         btn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        subtleButtons.add(btn);
         return btn;
     }
 
-    /**
-     * Botão de aba estilo Google Translate: texto azul e barra inferior azul de 3px quando ativo.
-     */
-    private static class LanguageTabButton extends JButton {
+    private class LanguageTabButton extends JButton {
         private boolean selectedTab = false;
 
         LanguageTabButton(String text) {
@@ -521,12 +577,11 @@ public class MainFrame extends JFrame {
             setContentAreaFilled(false);
             setBorder(new EmptyBorder(14, 14, 14, 14));
             setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-            setSelectedTab(false);
         }
 
         void setSelectedTab(boolean selected) {
             this.selectedTab = selected;
-            setForeground(selected ? GOOGLE_BLUE : TEXT_SECONDARY);
+            setForeground(selected ? getAccentBlue() : getTextSecondary());
             repaint();
         }
 
@@ -535,7 +590,7 @@ public class MainFrame extends JFrame {
             super.paintComponent(g);
             if (selectedTab) {
                 Graphics2D g2 = (Graphics2D) g.create();
-                g2.setColor(GOOGLE_BLUE);
+                g2.setColor(getAccentBlue());
                 g2.fillRect(8, getHeight() - 3, getWidth() - 16, 3);
                 g2.dispose();
             }
