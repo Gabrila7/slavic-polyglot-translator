@@ -1,82 +1,65 @@
-# SlavicPolyglot — Tradutor EN / ES / RU & Teclado Virtual Russo
+# Tradutor Instantâneo (Português • Inglês • Espanhol)
 
-Aplicativo em Java (Desktop e Mobile Android) para tradução rápida entre **Inglês**, **Espanhol**, **Russo** e **Português**, contando com um **teclado virtual cirílico (Кириллица)** integrado e sistema automático de transliteração fonética para alfabeto latino.
+Aplicativo de tradução rápida para **Desktop (Windows e Linux)** e **Mobile (Android)** desenvolvido em **Java**, seguindo o padrão visual e de interação do **Google Tradutor** (abas de seleção rápida de idiomas, detecção automática do idioma de origem, botão central de inversão `⇄` e tradução instantânea em tempo real conforme você digita).
 
-Projeto desenvolvido para praticar programação orientada a objetos em Java, interfaces gráficas assíncronas com `SwingWorker`, consumo de APIs HTTP sem dependências externas e compartilhamento das classes de negócio (`model` e `service`) entre o aplicativo Desktop (Windows/Linux) e a versão Mobile para Android (`.apk`).
+Projeto criado para exercitar programação orientada a objetos em Java, requisições HTTP assíncronas com debounce (`Timer` + `SwingWorker`) e compartilhamento das classes de serviço entre o app Desktop e o pacote nativo Android (`.apk`).
 
 ---
 
-## O que o programa faz
+## Principais Funcionalidades
 
-- **Tradução entre 4 idiomas:** suporte direto a Inglês (`EN`), Espanhol (`ES`), Russo (`RU`) e Português (`PT`), com atalhos rápidos para inverter pares de idiomas.
-- **Teclado Virtual Russo (Cirílico):** permite digitar em russo sem precisar configurar o idioma do teclado no sistema operacional.
-  - **Modo Padrão Russo (`ЙЦУКЕН`):** disposição clássica dos teclados russos.
-  - **Modo Fonético (`QWERTY -> ЯШЕРТЫ`):** aproxima as letras russas dos sons equivalentes do nosso teclado (ex: `A -> А`, `B -> Б`, `V -> В`, `G -> Г`, `D -> Д`, `O -> О`, `R -> Р`, `S -> С`, `T -> Т`).
-- **Transliteração Fonética em tempo real:** exibe abaixo do texto como ler e pronunciar as palavras em alfabeto cirílico usando letras latinas (ex: `Привет друг, как дела?` -> `Privet drug, kak dela?`).
-- **Guia de Frases e Fallback Offline:** possui um dicionário interno de expressões frequentes de conversação e viagem que funciona mesmo quando o dispositivo está sem internet.
-- **Versão Desktop (Windows e Linux) + Mobile (Android APK):** pacotes prontos na pasta `dist/` e na aba **Releases** para rodar no computador ou instalar diretamente no celular.
+- **Interação estilo Google Tradutor:** basta começar a digitar no painel da esquerda e a tradução aparece sozinha no painel da direita em tempo real, sem precisar ficar clicando em botões a cada frase.
+- **Abas de Idioma + Detecção Automática:** alterne com um clique entre **Detectar idioma**, **Português**, **Inglês** e **Espanhol**.
+- **Inversão Instantânea (`⇄`):** troca os idiomas de origem e destino invertendo automaticamente o texto já traduzido.
+- **Modo Offline Integrado:** conta com um dicionário embutido de frases e expressões do dia a dia caso o computador ou celular esteja sem internet.
+- **Multiplataforma (Windows, Linux e Android APK):** pacotes executáveis prontos na pasta `dist/` e na aba **Releases**.
 
 ---
 
 ## Estrutura do Projeto
 
 ```text
-slavic-polyglot-translator/
-├── compilar_e_executar.bat         # Script para compilar e abrir no Windows
-├── run_linux.sh                    # Script para compilar e abrir no Linux
+├── compilar_e_executar.bat         # Compila e abre a versão Desktop no Windows
+├── run_linux.sh                    # Compila e abre a versão Desktop no Linux
+├── SlavicPolyglot.exe              # Executável direto para Windows
 ├── dist/
 │   ├── SlavicPolyglot.exe          # Executável Windows
-│   ├── SlavicPolyglot.jar          # Executável multiplataforma (Windows / Linux)
+│   ├── SlavicPolyglot.jar          # Pacote JAR multiplataforma (Windows / Linux)
 │   ├── SlavicPolyglot-linux.run    # Binário auto-executável para Linux
 │   └── SlavicPolyglot-mobile.apk   # Instalador Android (para enviar e instalar no celular)
 ├── src/
-│   └── com/
-│       └── gabrila7/
-│           └── slavicpolyglot/
-│               ├── Main.java                           # Ponto de entrada Desktop (Swing)
-│               ├── model/
-│               │   ├── KeyboardLayout.java             # Mapas de teclas russas (JCUKEN e Fonético)
-│               │   ├── Language.java                   # Enum dos idiomas suportados
-│               │   └── TranslationEntry.java           # Registro de tradução e histórico
-│               ├── service/
-│               │   ├── OfflineDictionary.java          # Dicionário e frases salvas localmente
-│               │   ├── TranslationService.java         # Cliente HTTP e fallback offline
-│               │   └── TransliterationService.java     # Conversão Cirílico -> Alfabeto Latino
-│               └── ui/
-│                   ├── MainFrame.java                  # Janela principal Desktop
-│                   └── RussianKeyboardPanel.java       # Teclado virtual russo interativo
+│   └── com/gabrila7/slavicpolyglot/
+│       ├── Main.java                       # Ponto de entrada Desktop
+│       ├── model/
+│       │   ├── Language.java               # Idiomas suportados (Auto, PT, EN, ES)
+│       │   └── TranslationEntry.java       # Modelo do resultado da tradução
+│       ├── service/
+│       │   ├── OfflineDictionary.java      # Dicionário local e detector de idioma
+│       │   └── TranslationService.java     # Cliente de tradução neural + fallback
+│       └── ui/
+│           └── MainFrame.java              # Interface inspirada no Google Tradutor
 └── mobile-android/
     └── src/main/
-        ├── AndroidManifest.xml                         # Manifesto do app Android
+        ├── AndroidManifest.xml
         └── java/com/gabrila7/slavicpolyglot/mobile/
-            └── MainActivity.java                       # Interface Mobile nativa em Java
+            └── MainActivity.java           # Interface Android estilo Google Translate App
 ```
 
 ---
 
 ## Como Executar
 
-### 1. No Windows
-- **Pelo Executável:** dê dois cliques em `dist/SlavicPolyglot.exe` (ou em `dist/SlavicPolyglot.jar`) com o Java 11+ instalado.
-- **Compilando pelo script:** dê dois cliques em `compilar_e_executar.bat`.
+### No Windows
+- Dê dois cliques em `SlavicPolyglot.exe` ou em `compilar_e_executar.bat`.
 
-### 2. No Linux
-No terminal, dê permissão de execução ao binário ou ao script e rode:
-
+### No Linux
 ```bash
 chmod +x dist/SlavicPolyglot-linux.run
 ./dist/SlavicPolyglot-linux.run
 ```
-Ou compilando a partir do código-fonte:
-```bash
-chmod +x run_linux.sh
-./run_linux.sh
-```
 
-### 3. No Celular (Android)
-1. Envie o arquivo `dist/SlavicPolyglot-mobile.apk` (ou baixe na aba **Releases** do repositório) para o celular via WhatsApp, Telegram ou cabo USB.
-2. Toque no arquivo `.apk` recebido para instalar (caso o Android peça confirmação de fonte externa, basta permitir a instalação).
-3. Abra o app **SlavicPolyglot** no celular.
+### No Celular (Android)
+Envie o arquivo `dist/SlavicPolyglot-mobile.apk` (ou baixe na aba **Releases** do repositório) para o celular e toque nele para instalar.
 
 ---
 

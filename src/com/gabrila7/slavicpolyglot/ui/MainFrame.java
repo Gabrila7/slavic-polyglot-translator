@@ -4,7 +4,6 @@ import com.gabrila7.slavicpolyglot.model.Language;
 import com.gabrila7.slavicpolyglot.model.TranslationEntry;
 import com.gabrila7.slavicpolyglot.service.OfflineDictionary;
 import com.gabrila7.slavicpolyglot.service.TranslationService;
-import com.gabrila7.slavicpolyglot.service.TransliterationService;
 
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
@@ -12,14 +11,19 @@ import javax.swing.border.LineBorder;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
 import java.awt.*;
+import java.awt.datatransfer.DataFlavor;
 import java.awt.datatransfer.StringSelection;
-import java.awt.event.ActionEvent;
-import java.awt.event.KeyEvent;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
+import java.util.EnumMap;
+import java.util.Map;
 
 /**
- * Janela principal do SlavicPolyglot redesenhada com layout limpo estilo
- * DeepL / Google Translate. O teclado virtual russo fica recolhido por padrão
- * e pode ser ativado sob demanda em um clique.
+ * Interface principal inspirada diretamente no design e interação do Google Tradutor:
+ * - Abas de idioma clicáveis com indicador azul inferior
+ * - Tradução automática em tempo real enquanto você digita (debounce 350ms)
+ * - Botão central circular de inverter idiomas (⇄)
+ * - Duas áreas lado a lado (Origem em branco, Tradução em cinza suave)
  *
  * @author Gabriel Vinícius (@Gabrila7)
  */
@@ -27,466 +31,398 @@ public class MainFrame extends JFrame {
 
     private final TranslationService translationService = new TranslationService();
 
-    private JComboBox<Language> sourceLangCombo;
-    private JComboBox<Language> targetLangCombo;
+    private Language selectedSource = Language.AUTO;
+    private Language selectedTarget = Language.ENGLISH;
+
+    private final Map<Language, LanguageTabButton> sourceTabs = new EnumMap<>(Language.class);
+    private final Map<Language, LanguageTabButton> targetTabs = new EnumMap<>(Language.class);
+
     private JTextArea inputArea;
     private JTextArea outputArea;
-    private JLabel phoneticValueLabel;
     private JLabel charCountLabel;
-    private JLabel statusLabel;
-    private JButton translateButton;
-    private JButton toggleKeyboardButton;
-    private RussianKeyboardPanel keyboardDrawer;
+    private JLabel detectedBadgeLabel;
+    private JLabel statusFeedbackLabel;
+    private Timer debounceTimer;
+    private SwingWorker<TranslationEntry, Void> activeWorker;
+    private boolean suppressEvents = false;
 
-    // Paleta moderna clara com cabeçalho escuro
-    private static final Color APP_BG = new Color(241, 245, 249);         // #F1F5F9
-    private static final Color CARD_BG = Color.WHITE;                     // #FFFFFF
-    private static final Color CARD_BORDER = new Color(226, 232, 240);    // #E2E8F0
-    private static final Color HEADER_BG = new Color(15, 23, 42);         // #0F172A
-    private static final Color PRIMARY_BLUE = new Color(37, 99, 235);     // #2563EB
-    private static final Color TEXT_DARK = new Color(15, 23, 42);        // #0F172A
-    private static final Color TEXT_MUTED = new Color(100, 116, 139);     // #64748B
+    // Cores oficiais estilo Google Translate
+    private static final Color PAGE_BG = new Color(248, 249, 250);       // #F8F9FA
+    private static final Color CARD_WHITE = Color.WHITE;                 // #FFFFFF
+    private static final Color OUTPUT_BG = new Color(241, 243, 244);     // #F1F3F4
+    private static final Color BORDER_GRAY = new Color(218, 220, 224);   // #DADCE0
+    private static final Color GOOGLE_BLUE = new Color(26, 115, 232);    // #1A73E8
+    private static final Color TEXT_PRIMARY = new Color(32, 33, 36);     // #202124
+    private static final Color TEXT_SECONDARY = new Color(95, 99, 104);  // #5F6368
 
     public MainFrame() {
-        super("SlavicPolyglot — Tradutor Inglês • Espanhol • Russo");
+        super("Tradutor — Português • Inglês • Espanhol");
         initUI();
     }
 
     private void initUI() {
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        setSize(960, 640);
-        setMinimumSize(new Dimension(800, 540));
+        setSize(980, 560);
+        setMinimumSize(new Dimension(780, 460));
         setLocationRelativeTo(null);
 
         JPanel root = new JPanel(new BorderLayout(0, 0));
-        root.setBackground(APP_BG);
+        root.setBackground(PAGE_BG);
 
-        // 1. Topo escuro elegante com título e botões de utilidades
-        root.add(createTopHeaderBar(), BorderLayout.NORTH);
+        // 1. Barra superior estilo Google Translate
+        root.add(createGoogleTopBar(), BorderLayout.NORTH);
 
-        // 2. Corpo central (Seletor de idiomas + Cartões lado a lado + Gaveta do teclado oculta)
-        JPanel body = new JPanel(new BorderLayout(0, 12));
-        body.setBackground(APP_BG);
-        body.setBorder(new EmptyBorder(14, 18, 12, 18));
+        // 2. Container principal do cartão de tradução
+        JPanel centerWrapper = new JPanel(new BorderLayout(0, 14));
+        centerWrapper.setBackground(PAGE_BG);
+        centerWrapper.setBorder(new EmptyBorder(24, 28, 18, 28));
 
-        body.add(createLanguageControlBar(), BorderLayout.NORTH);
-        body.add(createTranslationCardsArea(), BorderLayout.CENTER);
+        centerWrapper.add(createMainTranslatorCard(), BorderLayout.CENTER);
+        centerWrapper.add(createQuickExamplesStrip(), BorderLayout.SOUTH);
 
-        // Gaveta do teclado virtual russo — inicia OCULTA para não poluir a tela
-        keyboardDrawer = new RussianKeyboardPanel(
-                inputArea,
-                this::executeTranslation,
-                () -> setKeyboardDrawerVisible(false)
-        );
-        keyboardDrawer.setVisible(false);
-        body.add(keyboardDrawer, BorderLayout.SOUTH);
-
-        root.add(body, BorderLayout.CENTER);
-        root.add(createStatusBar(), BorderLayout.SOUTH);
-
+        root.add(centerWrapper, BorderLayout.CENTER);
         setContentPane(root);
-        setupKeyboardShortcuts();
+
+        // Timer de debounce (350ms) para traduzir sozinho assim que o usuário para de digitar
+        debounceTimer = new Timer(350, e -> triggerLiveTranslation());
+        debounceTimer.setRepeats(false);
+
+        updateTabSelectionUI();
+        triggerLiveTranslation();
     }
 
-    private JPanel createTopHeaderBar() {
-        JPanel header = new JPanel(new BorderLayout(16, 0));
-        header.setBackground(HEADER_BG);
-        header.setBorder(new EmptyBorder(12, 20, 12, 20));
-
-        // Marca e subtítulo
-        JPanel brandBox = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 0));
-        brandBox.setOpaque(false);
-
-        JLabel title = new JLabel("🌐 SlavicPolyglot");
-        title.setFont(new Font("Segoe UI", Font.BOLD, 18));
-        title.setForeground(Color.WHITE);
-
-        JLabel badge = new JLabel("EN • ES • RU • PT");
-        badge.setFont(new Font("Segoe UI", Font.BOLD, 11));
-        badge.setForeground(new Color(147, 197, 253));
-        badge.setBorder(BorderFactory.createCompoundBorder(
-                new LineBorder(new Color(59, 130, 246), 1, true),
-                new EmptyBorder(2, 8, 2, 8)
+    private JPanel createGoogleTopBar() {
+        JPanel topBar = new JPanel(new BorderLayout());
+        topBar.setBackground(CARD_WHITE);
+        topBar.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createMatteBorder(0, 0, 1, 0, BORDER_GRAY),
+                new EmptyBorder(12, 28, 12, 28)
         ));
 
-        brandBox.add(title);
-        brandBox.add(badge);
+        JPanel leftBrand = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 0));
+        leftBrand.setOpaque(false);
 
-        // Botões do topo: Guia de Frases e Ativar Teclado Russo
-        JPanel actionsBox = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
-        actionsBox.setOpaque(false);
+        JLabel iconLabel = new JLabel("🌐");
+        iconLabel.setFont(new Font("Segoe UI Emoji", Font.PLAIN, 20));
 
-        JButton phrasebookBtn = createHeaderButton("📖 Frases Prontas", new Color(30, 41, 59), Color.WHITE);
-        phrasebookBtn.setToolTipText("Abrir lista de expressões prontas em Inglês, Espanhol e Russo");
-        phrasebookBtn.addActionListener(e -> showPhrasebookDialog());
+        JLabel title = new JLabel("Tradutor");
+        title.setFont(new Font("Segoe UI", Font.BOLD, 20));
+        title.setForeground(TEXT_PRIMARY);
 
-        toggleKeyboardButton = createHeaderButton("⌨️ Ativar Teclado Russo", PRIMARY_BLUE, Color.WHITE);
-        toggleKeyboardButton.setToolTipText("Mostrar ou ocultar o teclado virtual de letras russas (Cirílico)");
-        toggleKeyboardButton.addActionListener(e -> setKeyboardDrawerVisible(!keyboardDrawer.isVisible()));
+        JLabel subtitle = new JLabel("Português • Inglês • Espanhol");
+        subtitle.setFont(new Font("Segoe UI", Font.PLAIN, 13));
+        subtitle.setForeground(TEXT_SECONDARY);
+        subtitle.setBorder(new EmptyBorder(2, 6, 0, 0));
 
-        actionsBox.add(phrasebookBtn);
-        actionsBox.add(toggleKeyboardButton);
+        leftBrand.add(iconLabel);
+        leftBrand.add(title);
+        leftBrand.add(subtitle);
 
-        header.add(brandBox, BorderLayout.WEST);
-        header.add(actionsBox, BorderLayout.EAST);
+        statusFeedbackLabel = new JLabel("Tradução instantânea ativada");
+        statusFeedbackLabel.setFont(new Font("Segoe UI", Font.PLAIN, 12));
+        statusFeedbackLabel.setForeground(TEXT_SECONDARY);
+
+        topBar.add(leftBrand, BorderLayout.WEST);
+        topBar.add(statusFeedbackLabel, BorderLayout.EAST);
+        return topBar;
+    }
+
+    private JPanel createMainTranslatorCard() {
+        JPanel card = new JPanel(new BorderLayout(0, 0));
+        card.setBackground(CARD_WHITE);
+        card.setBorder(new LineBorder(BORDER_GRAY, 1, true));
+
+        // Topo do cartão: Abas de idioma na esquerda | Botão Inverter (⇄) | Abas de idioma na direita
+        card.add(createLanguageTabsHeader(), BorderLayout.NORTH);
+
+        // Corpo do cartão: Área de digitação (Esquerda) e Área de tradução (Direita)
+        JPanel splitBody = new JPanel(new GridLayout(1, 2, 0, 0));
+        splitBody.setOpaque(false);
+
+        splitBody.add(createSourcePane());
+        splitBody.add(createTargetPane());
+
+        card.add(splitBody, BorderLayout.CENTER);
+        return card;
+    }
+
+    private JPanel createLanguageTabsHeader() {
+        JPanel header = new JPanel(new BorderLayout(0, 0));
+        header.setBackground(CARD_WHITE);
+        header.setBorder(BorderFactory.createMatteBorder(0, 0, 1, 0, BORDER_GRAY));
+
+        // Abas da Esquerda (Origem: Detectar idioma, Português, Inglês, Espanhol)
+        JPanel leftTabs = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+        leftTabs.setOpaque(false);
+        leftTabs.setBorder(new EmptyBorder(0, 10, 0, 0));
+
+        for (Language lang : new Language[]{Language.AUTO, Language.PORTUGUESE, Language.ENGLISH, Language.SPANISH}) {
+            LanguageTabButton btn = new LanguageTabButton(lang.getDisplayName());
+            btn.addActionListener(e -> {
+                selectedSource = lang;
+                updateTabSelectionUI();
+                triggerLiveTranslation();
+            });
+            sourceTabs.put(lang, btn);
+            leftTabs.add(btn);
+        }
+
+        // Centro: Botão de Inverter Idiomas (⇄)
+        JPanel centerSwapPanel = new JPanel(new FlowLayout(FlowLayout.CENTER, 0, 6));
+        centerSwapPanel.setOpaque(false);
+
+        JButton swapBtn = createIconActionButton("⇄", "Inverter idiomas (Ctrl+Shift+S)");
+        swapBtn.setFont(new Font("Segoe UI Symbol", Font.BOLD, 16));
+        swapBtn.setPreferredSize(new Dimension(40, 36));
+        swapBtn.addActionListener(e -> swapLanguages());
+        centerSwapPanel.add(swapBtn);
+
+        // Abas da Direita (Destino: Português, Inglês, Espanhol)
+        JPanel rightTabs = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+        rightTabs.setOpaque(false);
+        rightTabs.setBorder(new EmptyBorder(0, 10, 0, 0));
+
+        for (Language lang : Language.getTargetLanguages()) {
+            LanguageTabButton btn = new LanguageTabButton(lang.getDisplayName());
+            btn.addActionListener(e -> {
+                selectedTarget = lang;
+                updateTabSelectionUI();
+                triggerLiveTranslation();
+            });
+            targetTabs.put(lang, btn);
+            rightTabs.add(btn);
+        }
+
+        JPanel twoSides = new JPanel(new GridLayout(1, 2, 0, 0));
+        twoSides.setOpaque(false);
+        twoSides.add(leftTabs);
+        twoSides.add(rightTabs);
+
+        header.add(twoSides, BorderLayout.CENTER);
+        header.add(centerSwapPanel, BorderLayout.EAST);
         return header;
     }
 
-    private JPanel createLanguageControlBar() {
-        JPanel bar = new JPanel(new BorderLayout(12, 0));
-        bar.setBackground(CARD_BG);
-        bar.setBorder(BorderFactory.createCompoundBorder(
-                new LineBorder(CARD_BORDER, 1, true),
-                new EmptyBorder(10, 14, 10, 14)
-        ));
+    private JPanel createSourcePane() {
+        JPanel pane = new JPanel(new BorderLayout(0, 0));
+        pane.setBackground(CARD_WHITE);
+        pane.setBorder(BorderFactory.createMatteBorder(0, 0, 0, 1, BORDER_GRAY));
 
-        // Seletores de idioma à esquerda
-        JPanel leftSelectors = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
-        leftSelectors.setOpaque(false);
-
-        JLabel fromLabel = new JLabel("Traduzir de:");
-        fromLabel.setFont(new Font("Segoe UI", Font.BOLD, 12));
-        fromLabel.setForeground(TEXT_MUTED);
-
-        sourceLangCombo = new JComboBox<>(Language.values());
-        sourceLangCombo.setSelectedItem(Language.ENGLISH);
-        sourceLangCombo.setFont(new Font("Segoe UI", Font.BOLD, 13));
-        sourceLangCombo.setPreferredSize(new Dimension(175, 34));
-
-        JButton swapBtn = createFlatButton("⇄ Inverter", new Color(241, 245, 249), TEXT_DARK);
-        swapBtn.setToolTipText("Inverter idiomas e texto");
-        swapBtn.addActionListener(e -> swapLanguagesAndText());
-
-        JLabel toLabel = new JLabel("Para:");
-        toLabel.setFont(new Font("Segoe UI", Font.BOLD, 12));
-        toLabel.setForeground(TEXT_MUTED);
-
-        targetLangCombo = new JComboBox<>(Language.values());
-        targetLangCombo.setSelectedItem(Language.RUSSIAN);
-        targetLangCombo.setFont(new Font("Segoe UI", Font.BOLD, 13));
-        targetLangCombo.setPreferredSize(new Dimension(175, 34));
-
-        leftSelectors.add(fromLabel);
-        leftSelectors.add(sourceLangCombo);
-        leftSelectors.add(swapBtn);
-        leftSelectors.add(toLabel);
-        leftSelectors.add(targetLangCombo);
-
-        // Pares rápidos + Botão Traduzir à direita
-        JPanel rightQuick = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
-        rightQuick.setOpaque(false);
-
-        JButton btnEnRu = createChipButton("EN ➔ RU", Language.ENGLISH, Language.RUSSIAN);
-        JButton btnRuEn = createChipButton("RU ➔ EN", Language.RUSSIAN, Language.ENGLISH);
-        JButton btnEsRu = createChipButton("ES ➔ RU", Language.SPANISH, Language.RUSSIAN);
-        JButton btnEnEs = createChipButton("EN ➔ ES", Language.ENGLISH, Language.SPANISH);
-
-        translateButton = createFlatButton("Traduzir Agora (Ctrl+Enter)", PRIMARY_BLUE, Color.WHITE);
-        translateButton.setFont(new Font("Segoe UI", Font.BOLD, 13));
-        translateButton.setPreferredSize(new Dimension(195, 34));
-        translateButton.addActionListener(e -> executeTranslation());
-
-        rightQuick.add(btnEnRu);
-        rightQuick.add(btnRuEn);
-        rightQuick.add(btnEsRu);
-        rightQuick.add(btnEnEs);
-        rightQuick.add(translateButton);
-
-        bar.add(leftSelectors, BorderLayout.WEST);
-        bar.add(rightQuick, BorderLayout.EAST);
-        return bar;
-    }
-
-    private JPanel createTranslationCardsArea() {
-        JPanel wrapper = new JPanel(new BorderLayout(0, 10));
-        wrapper.setOpaque(false);
-
-        JPanel grid = new JPanel(new GridLayout(1, 2, 14, 0));
-        grid.setOpaque(false);
-
-        // Cartão Esquerdo: Texto de Origem
-        JPanel sourceCard = new JPanel(new BorderLayout(0, 8));
-        sourceCard.setBackground(CARD_BG);
-        sourceCard.setBorder(BorderFactory.createCompoundBorder(
-                new LineBorder(CARD_BORDER, 1, true),
-                new EmptyBorder(12, 14, 10, 14)
-        ));
-
-        JPanel sourceTop = new JPanel(new BorderLayout());
-        sourceTop.setOpaque(false);
-        JLabel sourceTitle = new JLabel("TEXTO DE ORIGEM");
-        sourceTitle.setFont(new Font("Segoe UI", Font.BOLD, 11));
-        sourceTitle.setForeground(TEXT_MUTED);
-
-        JLabel kbShortcutHint = new JLabel("Precisa digitar em russo? Clique em '⌨️ Ativar Teclado Russo' no topo");
-        kbShortcutHint.setFont(new Font("Segoe UI", Font.PLAIN, 11));
-        kbShortcutHint.setForeground(PRIMARY_BLUE);
-        kbShortcutHint.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-        kbShortcutHint.addMouseListener(new java.awt.event.MouseAdapter() {
-            @Override
-            public void mouseClicked(java.awt.event.MouseEvent e) {
-                setKeyboardDrawerVisible(!keyboardDrawer.isVisible());
-            }
-        });
-
-        sourceTop.add(sourceTitle, BorderLayout.WEST);
-        sourceTop.add(kbShortcutHint, BorderLayout.EAST);
+        // Área de texto com botão "✕" no canto superior direito
+        JPanel textWrapper = new JPanel(new BorderLayout());
+        textWrapper.setOpaque(false);
+        textWrapper.setBorder(new EmptyBorder(16, 20, 8, 12));
 
         inputArea = new JTextArea();
-        inputArea.setFont(new Font("Segoe UI", Font.PLAIN, 17));
-        inputArea.setForeground(TEXT_DARK);
+        inputArea.setFont(new Font("Segoe UI", Font.PLAIN, 22));
+        inputArea.setForeground(TEXT_PRIMARY);
         inputArea.setLineWrap(true);
         inputArea.setWrapStyleWord(true);
-        inputArea.setBorder(new EmptyBorder(6, 2, 6, 2));
-        inputArea.setText("Hello friend, how are you?");
+        inputArea.setBorder(null);
+        inputArea.setText("Bom dia! Como você está hoje?");
+
         inputArea.getDocument().addDocumentListener(new DocumentListener() {
             @Override
-            public void insertUpdate(DocumentEvent e) { onInputTextChanged(); }
+            public void insertUpdate(DocumentEvent e) { onInputModified(); }
             @Override
-            public void removeUpdate(DocumentEvent e) { onInputTextChanged(); }
+            public void removeUpdate(DocumentEvent e) { onInputModified(); }
             @Override
-            public void changedUpdate(DocumentEvent e) { onInputTextChanged(); }
+            public void changedUpdate(DocumentEvent e) { onInputModified(); }
         });
 
-        JScrollPane inputScroll = new JScrollPane(inputArea);
-        inputScroll.setBorder(null);
+        JScrollPane scroll = new JScrollPane(inputArea);
+        scroll.setBorder(null);
+        scroll.setOpaque(false);
+        scroll.getViewport().setOpaque(false);
 
-        JPanel sourceBottom = new JPanel(new BorderLayout());
-        sourceBottom.setOpaque(false);
-        sourceBottom.setBorder(BorderFactory.createMatteBorder(1, 0, 0, 0, new Color(241, 245, 249)));
-
-        charCountLabel = new JLabel("26 caracteres");
-        charCountLabel.setFont(new Font("Segoe UI", Font.PLAIN, 11));
-        charCountLabel.setForeground(TEXT_MUTED);
-
-        JButton clearBtn = createFlatButton("Limpar texto", new Color(248, 250, 252), TEXT_MUTED);
-        clearBtn.addActionListener(e -> {
+        // Botão X para limpar rápido (igual ao Google Translate)
+        JPanel topRightClear = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 0));
+        topRightClear.setOpaque(false);
+        JButton clearXBtn = createIconActionButton("✕", "Limpar texto");
+        clearXBtn.setPreferredSize(new Dimension(32, 32));
+        clearXBtn.addActionListener(e -> {
             inputArea.setText("");
             outputArea.setText("");
-            phoneticValueLabel.setText("Digite ou traduza uma frase em russo para ver como pronunciar.");
+            detectedBadgeLabel.setText("");
             inputArea.requestFocusInWindow();
         });
+        topRightClear.add(clearXBtn);
 
-        sourceBottom.add(charCountLabel, BorderLayout.WEST);
-        sourceBottom.add(clearBtn, BorderLayout.EAST);
+        textWrapper.add(scroll, BorderLayout.CENTER);
+        textWrapper.add(topRightClear, BorderLayout.EAST);
 
-        sourceCard.add(sourceTop, BorderLayout.NORTH);
-        sourceCard.add(inputScroll, BorderLayout.CENTER);
-        sourceCard.add(sourceBottom, BorderLayout.SOUTH);
+        // Rodapé do painel esquerdo: Colar + Contador de caracteres
+        JPanel bottomBar = new JPanel(new BorderLayout());
+        bottomBar.setOpaque(false);
+        bottomBar.setBorder(new EmptyBorder(8, 20, 14, 18));
 
-        // Cartão Direito: Resultado da Tradução
-        JPanel targetCard = new JPanel(new BorderLayout(0, 8));
-        targetCard.setBackground(new Color(248, 250, 252));
-        targetCard.setBorder(BorderFactory.createCompoundBorder(
-                new LineBorder(CARD_BORDER, 1, true),
-                new EmptyBorder(12, 14, 10, 14)
-        ));
+        JPanel leftTools = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        leftTools.setOpaque(false);
 
-        JPanel targetTop = new JPanel(new BorderLayout());
-        targetTop.setOpaque(false);
-        JLabel targetTitle = new JLabel("TRADUÇÃO");
-        targetTitle.setFont(new Font("Segoe UI", Font.BOLD, 11));
-        targetTitle.setForeground(TEXT_MUTED);
-        targetTop.add(targetTitle, BorderLayout.WEST);
+        JButton pasteBtn = createSubtlePillButton("📋 Colar");
+        pasteBtn.addActionListener(e -> pasteFromClipboard());
+        leftTools.add(pasteBtn);
+
+        detectedBadgeLabel = new JLabel("");
+        detectedBadgeLabel.setFont(new Font("Segoe UI", Font.ITALIC, 12));
+        detectedBadgeLabel.setForeground(GOOGLE_BLUE);
+        leftTools.add(detectedBadgeLabel);
+
+        charCountLabel = new JLabel("29 / 5000");
+        charCountLabel.setFont(new Font("Segoe UI", Font.PLAIN, 12));
+        charCountLabel.setForeground(TEXT_SECONDARY);
+
+        bottomBar.add(leftTools, BorderLayout.WEST);
+        bottomBar.add(charCountLabel, BorderLayout.EAST);
+
+        pane.add(textWrapper, BorderLayout.CENTER);
+        pane.add(bottomBar, BorderLayout.SOUTH);
+        return pane;
+    }
+
+    private JPanel createTargetPane() {
+        JPanel pane = new JPanel(new BorderLayout(0, 0));
+        pane.setBackground(OUTPUT_BG);
+
+        JPanel textWrapper = new JPanel(new BorderLayout());
+        textWrapper.setOpaque(false);
+        textWrapper.setBorder(new EmptyBorder(16, 20, 8, 20));
 
         outputArea = new JTextArea();
-        outputArea.setFont(new Font("Segoe UI", Font.PLAIN, 17));
-        outputArea.setForeground(TEXT_DARK);
-        outputArea.setBackground(new Color(248, 250, 252));
+        outputArea.setFont(new Font("Segoe UI", Font.PLAIN, 22));
+        outputArea.setForeground(TEXT_PRIMARY);
+        outputArea.setBackground(OUTPUT_BG);
         outputArea.setLineWrap(true);
         outputArea.setWrapStyleWord(true);
         outputArea.setEditable(false);
-        outputArea.setBorder(new EmptyBorder(6, 2, 6, 2));
-        outputArea.setText("Привет друг, как дела?");
+        outputArea.setBorder(null);
+        outputArea.setText("Good morning! How are you today?");
 
-        JScrollPane outputScroll = new JScrollPane(outputArea);
-        outputScroll.setBorder(null);
+        JScrollPane scroll = new JScrollPane(outputArea);
+        scroll.setBorder(null);
+        scroll.setOpaque(false);
+        scroll.getViewport().setOpaque(false);
 
-        JPanel targetBottom = new JPanel(new BorderLayout());
-        targetBottom.setOpaque(false);
-        targetBottom.setBorder(BorderFactory.createMatteBorder(1, 0, 0, 0, CARD_BORDER));
+        textWrapper.add(scroll, BorderLayout.CENTER);
 
-        JPanel targetActions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
-        targetActions.setOpaque(false);
+        // Rodapé do painel direito: Botão Copiar Tradução
+        JPanel bottomBar = new JPanel(new BorderLayout());
+        bottomBar.setOpaque(false);
+        bottomBar.setBorder(new EmptyBorder(8, 20, 14, 20));
 
-        JButton copyBtn = createFlatButton("📋 Copiar Tradução", new Color(239, 246, 255), PRIMARY_BLUE);
-        copyBtn.addActionListener(e -> copyToClipboard(outputArea.getText(), "Tradução copiada para a área de transferência!"));
+        JPanel rightActions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        rightActions.setOpaque(false);
 
-        targetActions.add(copyBtn);
-        targetBottom.add(targetActions, BorderLayout.EAST);
+        JButton copyBtn = createSubtlePillButton("📋 Copiar tradução");
+        copyBtn.addActionListener(e -> copyToClipboard(outputArea.getText()));
+        rightActions.add(copyBtn);
 
-        targetCard.add(targetTop, BorderLayout.NORTH);
-        targetCard.add(outputScroll, BorderLayout.CENTER);
-        targetCard.add(targetBottom, BorderLayout.SOUTH);
+        bottomBar.add(rightActions, BorderLayout.EAST);
 
-        grid.add(sourceCard);
-        grid.add(targetCard);
-
-        // Faixa inferior de Pronúncia Fonética (Transliteração)
-        JPanel phoneticBar = new JPanel(new BorderLayout(10, 0));
-        phoneticBar.setBackground(CARD_BG);
-        phoneticBar.setBorder(BorderFactory.createCompoundBorder(
-                new LineBorder(CARD_BORDER, 1, true),
-                new EmptyBorder(8, 14, 8, 14)
-        ));
-
-        JLabel phoneticTitle = new JLabel("🔊 Pronúncia Russa (Alfabeto Latino):");
-        phoneticTitle.setFont(new Font("Segoe UI", Font.BOLD, 12));
-        phoneticTitle.setForeground(TEXT_MUTED);
-
-        phoneticValueLabel = new JLabel("Privet drug, kak dela?");
-        phoneticValueLabel.setFont(new Font("Consolas", Font.BOLD, 14));
-        phoneticValueLabel.setForeground(PRIMARY_BLUE);
-
-        JButton copyPhoneticBtn = createFlatButton("Copiar Pronúncia", new Color(241, 245, 249), TEXT_DARK);
-        copyPhoneticBtn.addActionListener(e -> copyToClipboard(phoneticValueLabel.getText(), "Pronúncia fonética copiada!"));
-
-        phoneticBar.add(phoneticTitle, BorderLayout.WEST);
-        phoneticBar.add(phoneticValueLabel, BorderLayout.CENTER);
-        phoneticBar.add(copyPhoneticBtn, BorderLayout.EAST);
-
-        wrapper.add(grid, BorderLayout.CENTER);
-        wrapper.add(phoneticBar, BorderLayout.SOUTH);
-        return wrapper;
+        pane.add(textWrapper, BorderLayout.CENTER);
+        pane.add(bottomBar, BorderLayout.SOUTH);
+        return pane;
     }
 
-    private JPanel createStatusBar() {
-        JPanel bar = new JPanel(new BorderLayout());
-        bar.setBackground(CARD_BG);
-        bar.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createMatteBorder(1, 0, 0, 0, CARD_BORDER),
-                new EmptyBorder(6, 18, 6, 18)
-        ));
+    private JPanel createQuickExamplesStrip() {
+        JPanel strip = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        strip.setOpaque(false);
 
-        statusLabel = new JLabel("Pronto • Dica: pressione Ctrl+Enter para traduzir rapidamente");
-        statusLabel.setFont(new Font("Segoe UI", Font.PLAIN, 11));
-        statusLabel.setForeground(TEXT_MUTED);
+        JLabel label = new JLabel("Testar frases rápidas:");
+        label.setFont(new Font("Segoe UI", Font.PLAIN, 12));
+        label.setForeground(TEXT_SECONDARY);
+        strip.add(label);
 
-        JLabel author = new JLabel("Gabriel Vinícius (@Gabrila7)");
-        author.setFont(new Font("Segoe UI", Font.PLAIN, 11));
-        author.setForeground(TEXT_MUTED);
-
-        bar.add(statusLabel, BorderLayout.WEST);
-        bar.add(author, BorderLayout.EAST);
-        return bar;
-    }
-
-    private void setKeyboardDrawerVisible(boolean visible) {
-        keyboardDrawer.setVisible(visible);
-        if (visible) {
-            toggleKeyboardButton.setText("⌨️ Ocultar Teclado Russo");
-            toggleKeyboardButton.setBackground(new Color(22, 163, 74)); // Verde indicando ativo
-            statusLabel.setText("Teclado Virtual Russo ativado • Clique nas teclas abaixo para inserir letras cirílicas");
-        } else {
-            toggleKeyboardButton.setText("⌨️ Ativar Teclado Russo");
-            toggleKeyboardButton.setBackground(PRIMARY_BLUE);
-            statusLabel.setText("Teclado Virtual Russo recolhido");
-        }
-        revalidate();
-        repaint();
-    }
-
-    private void showPhrasebookDialog() {
-        JDialog dialog = new JDialog(this, "📖 Guia Rápido de Frases (Clique duas vezes para usar)", true);
-        dialog.setSize(760, 460);
-        dialog.setLocationRelativeTo(this);
-
-        String[] cols = {"Categoria", "Inglês (EN)", "Espanhol (ES)", "Russo (RU)", "Pronúncia Russa"};
-        javax.swing.table.DefaultTableModel model = new javax.swing.table.DefaultTableModel(cols, 0) {
-            @Override
-            public boolean isCellEditable(int r, int c) { return false; }
+        String[][] samples = {
+                {"Como vai você?", "PT"},
+                {"Where is the airport?", "EN"},
+                {"Muchas gracias por tu ayuda", "ES"},
+                {"Can you help me, please?", "EN"}
         };
 
-        for (OfflineDictionary.PhraseRow row : OfflineDictionary.getAllPhrases()) {
-            String ru = row.getByLanguage(Language.RUSSIAN);
-            model.addRow(new Object[]{
-                    row.getCategory(),
-                    row.getByLanguage(Language.ENGLISH),
-                    row.getByLanguage(Language.SPANISH),
-                    ru,
-                    TransliterationService.toLatinPhonetic(ru)
-            });
-        }
-
-        JTable table = new JTable(model);
-        table.setRowHeight(28);
-        table.setFont(new Font("Segoe UI", Font.PLAIN, 13));
-        table.getTableHeader().setFont(new Font("Segoe UI", Font.BOLD, 12));
-
-        table.addMouseListener(new java.awt.event.MouseAdapter() {
-            @Override
-            public void mouseClicked(java.awt.event.MouseEvent e) {
-                if (e.getClickCount() == 2 && table.getSelectedRow() >= 0) {
-                    int r = table.getSelectedRow();
-                    String ruText = (String) model.getValueAt(r, 3);
-                    sourceLangCombo.setSelectedItem(Language.RUSSIAN);
-                    targetLangCombo.setSelectedItem(Language.ENGLISH);
-                    inputArea.setText(ruText);
-                    dialog.dispose();
-                    executeTranslation();
+        for (String[] s : samples) {
+            JButton chip = createSubtlePillButton(s[0]);
+            chip.addActionListener(e -> {
+                selectedSource = Language.AUTO;
+                if ("EN".equals(s[1])) {
+                    selectedTarget = Language.PORTUGUESE;
+                } else {
+                    selectedTarget = Language.ENGLISH;
                 }
-            }
-        });
+                updateTabSelectionUI();
+                inputArea.setText(s[0]);
+            });
+            strip.add(chip);
+        }
 
-        JPanel content = new JPanel(new BorderLayout(0, 8));
-        content.setBorder(new EmptyBorder(12, 12, 12, 12));
-        JLabel hint = new JLabel("Dê dois cliques em qualquer frase abaixo para carregá-la no tradutor:");
-        hint.setFont(new Font("Segoe UI", Font.BOLD, 12));
-        content.add(hint, BorderLayout.NORTH);
-        content.add(new JScrollPane(table), BorderLayout.CENTER);
-
-        dialog.setContentPane(content);
-        dialog.setVisible(true);
+        return strip;
     }
 
-    private void setupKeyboardShortcuts() {
-        KeyStroke ctrlEnter = KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx());
-        inputArea.getInputMap().put(ctrlEnter, "translateNow");
-        inputArea.getActionMap().put("translateNow", new AbstractAction() {
-            @Override
-            public void actionPerformed(ActionEvent e) {
-                executeTranslation();
-            }
-        });
-    }
-
-    private void onInputTextChanged() {
+    private void onInputModified() {
+        if (suppressEvents) return;
         String text = inputArea.getText();
-        charCountLabel.setText(text.length() + " caracteres");
-        if (TransliterationService.containsCyrillic(text)) {
-            phoneticValueLabel.setText(TransliterationService.toLatinPhonetic(text));
-        }
-    }
+        charCountLabel.setText(text.length() + " / 5000");
 
-    private void swapLanguagesAndText() {
-        Language src = (Language) sourceLangCombo.getSelectedItem();
-        Language tgt = (Language) targetLangCombo.getSelectedItem();
-        sourceLangCombo.setSelectedItem(tgt);
-        targetLangCombo.setSelectedItem(src);
-
-        String currentOut = outputArea.getText().trim();
-        if (!currentOut.isEmpty()) {
-            inputArea.setText(currentOut);
-            executeTranslation();
-        }
-    }
-
-    private void executeTranslation() {
-        String text = inputArea.getText().trim();
-        if (text.isEmpty()) {
-            statusLabel.setText("Digite algum texto no quadro da esquerda para traduzir.");
-            inputArea.requestFocusInWindow();
+        if (text.trim().isEmpty()) {
+            debounceTimer.stop();
+            outputArea.setText("");
+            detectedBadgeLabel.setText("");
+            statusFeedbackLabel.setText("Digite para traduzir");
             return;
         }
 
-        Language src = (Language) sourceLangCombo.getSelectedItem();
-        Language tgt = (Language) targetLangCombo.getSelectedItem();
+        outputArea.setForeground(TEXT_SECONDARY);
+        debounceTimer.restart();
+    }
 
-        translateButton.setEnabled(false);
-        translateButton.setText("Traduzindo...");
-        statusLabel.setText("Traduzindo de " + src.getDisplayName() + " para " + tgt.getDisplayName() + "...");
+    private void swapLanguages() {
+        Language effectiveFrom = selectedSource == Language.AUTO
+                ? OfflineDictionary.guessLanguage(inputArea.getText())
+                : selectedSource;
 
-        SwingWorker<TranslationEntry, Void> worker = new SwingWorker<TranslationEntry, Void>() {
+        Language oldTarget = selectedTarget;
+        selectedSource = oldTarget;
+        selectedTarget = effectiveFrom;
+
+        String currentOut = outputArea.getText().trim();
+        updateTabSelectionUI();
+
+        if (!currentOut.isEmpty() && !currentOut.equals("Traduzindo...")) {
+            suppressEvents = true;
+            inputArea.setText(currentOut);
+            charCountLabel.setText(currentOut.length() + " / 5000");
+            suppressEvents = false;
+        }
+        triggerLiveTranslation();
+    }
+
+    private void updateTabSelectionUI() {
+        for (Map.Entry<Language, LanguageTabButton> entry : sourceTabs.entrySet()) {
+            entry.getValue().setSelectedTab(entry.getKey() == selectedSource);
+        }
+        for (Map.Entry<Language, LanguageTabButton> entry : targetTabs.entrySet()) {
+            entry.getValue().setSelectedTab(entry.getKey() == selectedTarget);
+        }
+    }
+
+    private void triggerLiveTranslation() {
+        final String text = inputArea.getText().trim();
+        if (text.isEmpty()) {
+            outputArea.setText("");
+            detectedBadgeLabel.setText("");
+            return;
+        }
+
+        if (activeWorker != null && !activeWorker.isDone()) {
+            activeWorker.cancel(true);
+        }
+
+        final Language src = selectedSource;
+        final Language tgt = selectedTarget;
+
+        statusFeedbackLabel.setText("Traduzindo...");
+
+        activeWorker = new SwingWorker<TranslationEntry, Void>() {
             @Override
             protected TranslationEntry doInBackground() {
                 return translationService.translate(text, src, tgt);
@@ -494,73 +430,115 @@ public class MainFrame extends JFrame {
 
             @Override
             protected void done() {
+                if (isCancelled()) return;
                 try {
                     TranslationEntry entry = get();
+                    outputArea.setForeground(TEXT_PRIMARY);
                     outputArea.setText(entry.getTranslatedText());
-                    if (!entry.getTransliteration().isEmpty()) {
-                        phoneticValueLabel.setText(entry.getTransliteration());
+
+                    if (src == Language.AUTO) {
+                        detectedBadgeLabel.setText("Idioma detectado: " + entry.getSourceLang().getDisplayName());
                     } else {
-                        phoneticValueLabel.setText("— (Apenas textos em Russo possuem transcrição fonética)");
+                        detectedBadgeLabel.setText("");
                     }
-                    statusLabel.setText("Tradução concluída (" + entry.getEngineUsed() + ") às " + entry.getTimestamp());
+                    statusFeedbackLabel.setText("Traduzido automaticamente");
                 } catch (Exception ex) {
-                    Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
-                    statusLabel.setText("Aviso: " + cause.getMessage());
-                    outputArea.setText("Não foi possível traduzir agora.\n" + cause.getMessage());
-                } finally {
-                    translateButton.setEnabled(true);
-                    translateButton.setText("Traduzir Agora (Ctrl+Enter)");
+                    outputArea.setForeground(TEXT_SECONDARY);
+                    outputArea.setText("Sem conexão no momento.");
+                    statusFeedbackLabel.setText("Modo offline");
                 }
             }
         };
-
-        worker.execute();
+        activeWorker.execute();
     }
 
-    private void copyToClipboard(String text, String message) {
+    private void copyToClipboard(String text) {
         if (text == null || text.trim().isEmpty()) return;
         Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(text), null);
-        statusLabel.setText(message);
+        statusFeedbackLabel.setText("✓ Tradução copiada para a área de transferência");
     }
 
-    private JButton createHeaderButton(String text, Color bg, Color fg) {
-        JButton btn = new JButton(text);
-        btn.setFont(new Font("Segoe UI", Font.BOLD, 12));
-        btn.setBackground(bg);
-        btn.setForeground(fg);
+    private void pasteFromClipboard() {
+        try {
+            String data = (String) Toolkit.getDefaultToolkit()
+                    .getSystemClipboard().getData(DataFlavor.stringFlavor);
+            if (data != null) {
+                inputArea.setText(data);
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    private JButton createIconActionButton(String symbol, String tooltip) {
+        JButton btn = new JButton(symbol);
+        btn.setToolTipText(tooltip);
+        btn.setFont(new Font("Segoe UI", Font.PLAIN, 15));
+        btn.setForeground(TEXT_SECONDARY);
+        btn.setBackground(CARD_WHITE);
         btn.setFocusPainted(false);
-        btn.setBorder(BorderFactory.createCompoundBorder(
-                new LineBorder(new Color(71, 85, 105), 1, true),
-                new EmptyBorder(6, 12, 6, 12)
-        ));
+        btn.setBorderPainted(false);
+        btn.setContentAreaFilled(false);
         btn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        btn.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mouseEntered(MouseEvent e) {
+                btn.setForeground(GOOGLE_BLUE);
+            }
+
+            @Override
+            public void mouseExited(MouseEvent e) {
+                btn.setForeground(TEXT_SECONDARY);
+            }
+        });
         return btn;
     }
 
-    private JButton createFlatButton(String text, Color bg, Color fg) {
+    private JButton createSubtlePillButton(String text) {
         JButton btn = new JButton(text);
         btn.setFont(new Font("Segoe UI", Font.BOLD, 12));
-        btn.setBackground(bg);
-        btn.setForeground(fg);
+        btn.setForeground(TEXT_SECONDARY);
+        btn.setBackground(CARD_WHITE);
         btn.setFocusPainted(false);
         btn.setBorder(BorderFactory.createCompoundBorder(
-                new LineBorder(CARD_BORDER, 1, true),
+                new LineBorder(BORDER_GRAY, 1, true),
                 new EmptyBorder(5, 12, 5, 12)
         ));
         btn.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
         return btn;
     }
 
-    private JButton createChipButton(String label, Language src, Language tgt) {
-        JButton btn = createFlatButton(label, new Color(248, 250, 252), TEXT_MUTED);
-        btn.setFont(new Font("Segoe UI", Font.BOLD, 11));
-        btn.addActionListener(e -> {
-            sourceLangCombo.setSelectedItem(src);
-            targetLangCombo.setSelectedItem(tgt);
-            if (!inputArea.getText().trim().isEmpty()) {
-                executeTranslation();
+    /**
+     * Botão de aba estilo Google Translate: texto azul e barra inferior azul de 3px quando ativo.
+     */
+    private static class LanguageTabButton extends JButton {
+        private boolean selectedTab = false;
+
+        LanguageTabButton(String text) {
+            super(text);
+            setFont(new Font("Segoe UI", Font.BOLD, 13));
+            setFocusPainted(false);
+            setBorderPainted(false);
+            setContentAreaFilled(false);
+            setBorder(new EmptyBorder(14, 14, 14, 14));
+            setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+            setSelectedTab(false);
+        }
+
+        void setSelectedTab(boolean selected) {
+            this.selectedTab = selected;
+            setForeground(selected ? GOOGLE_BLUE : TEXT_SECONDARY);
+            repaint();
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            super.paintComponent(g);
+            if (selectedTab) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setColor(GOOGLE_BLUE);
+                g2.fillRect(8, getHeight() - 3, getWidth() - 16, 3);
+                g2.dispose();
             }
-        });
-        return btn;
+        }
     }
 }

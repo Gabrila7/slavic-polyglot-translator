@@ -13,9 +13,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Serviço responsável pela comunicação com APIs públicas de tradução
- * (com fallback automático em múltiplos provedores e dicionário offline)
- * e gerenciamento do histórico da sessão.
+ * Serviço de tradução automática entre Português, Inglês e Espanhol.
+ * Funciona de forma contínua (tempo real conforme o usuário digita),
+ * com detecção automática de idioma e fallback offline.
  *
  * @author Gabriel Vinícius (@Gabrila7)
  */
@@ -23,74 +23,55 @@ public class TranslationService {
 
     private final List<TranslationEntry> history = new ArrayList<>();
 
-    /**
-     * Realiza a tradução do texto entre o idioma de origem e destino.
-     * Tenta primeiro os endpoints online e recorre ao dicionário embutido caso
-     * não haja conexão.
-     */
     public TranslationEntry translate(String text, Language source, Language target) {
         if (text == null || text.trim().isEmpty()) {
-            throw new IllegalArgumentException("Digite ou selecione um texto para traduzir.");
+            return new TranslationEntry(source, target, "", "", "Pronto");
         }
 
         String trimmed = text.trim();
-        if (source == target) {
-            String translit = buildTransliterationIfApplicable(trimmed, trimmed, source, target);
-            TranslationEntry entry = new TranslationEntry(source, target, trimmed, trimmed, translit, "Mesmo idioma");
-            history.add(0, entry);
-            return entry;
+        Language effectiveSource = source == Language.AUTO ? OfflineDictionary.guessLanguage(trimmed) : source;
+
+        if (effectiveSource == target) {
+            return new TranslationEntry(effectiveSource, target, trimmed, trimmed, "Mesmo idioma");
         }
 
         String translated = null;
-        String engine = "Offline Dictionary";
+        String engine = "Offline";
 
-        // 1. Tenta API rápida de tradução neural (Clients5 GTX)
+        // 1. Provedor principal (Google Translate API endpoint)
         try {
-            translated = queryGoogleClients5(trimmed, source.getCode(), target.getCode());
+            String slCode = source == Language.AUTO ? "auto" : source.getCode();
+            translated = queryGoogleClients5(trimmed, slCode, target.getCode());
             if (translated != null && !translated.isEmpty()) {
-                engine = "Neural Cloud API";
+                engine = "Google Neural API";
             }
         } catch (Exception ignored) {
-            // Prossegue para o segundo provedor
         }
 
-        // 2. Fallback para API pública MyMemory Translated
+        // 2. Provedor secundário (MyMemory API)
         if (translated == null || translated.isEmpty()) {
             try {
-                translated = queryMyMemoryApi(trimmed, source.getCode(), target.getCode());
+                translated = queryMyMemoryApi(trimmed, effectiveSource.getCode(), target.getCode());
                 if (translated != null && !translated.isEmpty()) {
                     engine = "MyMemory API";
                 }
             } catch (Exception ignored) {
-                // Prossegue para dicionário local
             }
         }
 
-        // 3. Fallback para o dicionário offline interno
+        // 3. Dicionário local caso sem internet
         if (translated == null || translated.isEmpty()) {
-            translated = OfflineDictionary.lookupOffline(trimmed, source, target);
+            translated = OfflineDictionary.lookupOffline(trimmed, effectiveSource, target);
             if (translated != null) {
                 engine = "Dicionário Offline";
             } else {
-                throw new RuntimeException(
-                        "Sem conexão com o servidor de tradução e frase não encontrada no dicionário offline.");
+                throw new RuntimeException("Sem conexão com a internet no momento.");
             }
         }
 
-        String translit = buildTransliterationIfApplicable(trimmed, translated, source, target);
-        TranslationEntry entry = new TranslationEntry(source, target, trimmed, translated, translit, engine);
+        TranslationEntry entry = new TranslationEntry(effectiveSource, target, trimmed, translated, engine);
         history.add(0, entry);
         return entry;
-    }
-
-    private String buildTransliterationIfApplicable(String original, String translated, Language source, Language target) {
-        if (target == Language.RUSSIAN || TransliterationService.containsCyrillic(translated)) {
-            return TransliterationService.toLatinPhonetic(translated);
-        }
-        if (source == Language.RUSSIAN || TransliterationService.containsCyrillic(original)) {
-            return TransliterationService.toLatinPhonetic(original);
-        }
-        return "";
     }
 
     private String queryGoogleClients5(String text, String sl, String tl) throws Exception {
@@ -112,25 +93,22 @@ public class TranslationService {
         String json = httpGet(endpoint);
         String marker = "\"translatedText\":\"";
         int idx = json.indexOf(marker);
-        if (idx < 0) {
-            return null;
-        }
-        int start = idx + marker.length();
-        return unescapeJsonStringUntilQuote(json, start);
+        if (idx < 0) return null;
+        return unescapeJsonStringUntilQuote(json, idx + marker.length());
     }
 
     private String httpGet(String urlStr) throws Exception {
         URL url = new URL(urlStr);
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
         conn.setRequestMethod("GET");
-        conn.setConnectTimeout(6000);
-        conn.setReadTimeout(6000);
+        conn.setConnectTimeout(5000);
+        conn.setReadTimeout(5000);
         conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
         conn.setRequestProperty("Accept-Charset", "UTF-8");
 
         int status = conn.getResponseCode();
         if (status < 200 || status >= 300) {
-            throw new RuntimeException("HTTP status " + status);
+            throw new RuntimeException("HTTP " + status);
         }
 
         StringBuilder response = new StringBuilder();
@@ -144,9 +122,6 @@ public class TranslationService {
         return response.toString();
     }
 
-    /**
-     * Extrai a primeira string JSON válida de um array JSON simples como ["Texto traduzido"].
-     */
     private String extractFirstJsonString(String json) {
         if (json == null) return null;
         int firstQuote = json.indexOf('"');
@@ -192,9 +167,5 @@ public class TranslationService {
 
     public List<TranslationEntry> getHistory() {
         return history;
-    }
-
-    public void clearHistory() {
-        history.clear();
     }
 }
