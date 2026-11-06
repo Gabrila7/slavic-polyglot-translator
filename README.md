@@ -24,7 +24,6 @@ Projeto desenvolvido para praticar programação orientada a objetos em Java, in
 slavic-polyglot-translator/
 ├── compilar_e_executar.bat         # Script para compilar e abrir no Windows
 ├── run_linux.sh                    # Script para compilar e abrir no Linux
-├── SlavicPolyglot.exe              # Atalho executável nativo para Windows
 ├── dist/
 │   ├── SlavicPolyglot.exe          # Executável Windows
 │   ├── SlavicPolyglot.jar          # Executável multiplataforma (Windows / Linux)
@@ -58,7 +57,7 @@ slavic-polyglot-translator/
 ## Como Executar
 
 ### 1. No Windows
-- **Pelo Executável:** dê dois cliques em `SlavicPolyglot.exe` (ou em `dist/SlavicPolyglot.jar`) com o Java 11+ instalado.
+- **Pelo Executável:** dê dois cliques em `dist/SlavicPolyglot.exe` (ou em `dist/SlavicPolyglot.jar`) com o Java 11+ instalado.
 - **Compilando pelo script:** dê dois cliques em `compilar_e_executar.bat`.
 
 ### 2. No Linux
