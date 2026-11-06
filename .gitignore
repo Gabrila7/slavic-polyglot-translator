@@ -1,0 +1,9 @@
+bin/
+mobile-android/build/
+*.class
+*.keystore
+.DS_Store
+Thumbs.db
+.idea/
+*.iml
+.vscode/
